@@ -1,0 +1,115 @@
+version: "3.9"
+
+networks:
+  fraud_net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  mlflow_data:
+  airflow_logs:
+
+services:
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper
+    networks: [fraud_net]
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka
+    networks: [fraud_net]
+    depends_on: [zookeeper]
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT_INTERNAL
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    networks: [fraud_net]
+    depends_on: [kafka]
+    ports:
+      - "8080:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: local
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
+
+  postgres:
+    image: postgres:15
+    container_name: postgres
+    networks: [fraud_net]
+    ports:
+      - "5433:5432"
+    environment:
+      POSTGRES_USER: fraud_user
+      POSTGRES_PASSWORD: fraud_pass
+      POSTGRES_DB: fraud_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+
+  mlflow:
+    image: ghcr.io/mlflow/mlflow:v2.11.0
+    container_name: mlflow
+    networks: [fraud_net]
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow_data:/mlflow
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:///mlflow/mlflow.db
+      --default-artifact-root /mlflow/artifacts
+
+
+  generator:
+    build:
+      context: ../../ingestion/generator
+      dockerfile: Dockerfile
+    container_name: generator
+    networks: [fraud_net]
+    depends_on: [kafka]
+    command: ["python3", "kafka_producer.py", "--rate", "100", "--fraud-rate", "0.02"]
+    restart: on-failure
+
+  spark:
+    build:
+      context: ../../processing/spark
+      dockerfile: Dockerfile
+    container_name: spark
+    networks: [fraud_net]
+    depends_on: [kafka]
+    environment:
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=us-east-1
+    command: spark-submit --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.0,io.delta:delta-spark_2.12:3.1.0,org.apache.hadoop:hadoop-aws:3.3.4 /app/streaming_job.py
+    restart: on-failure
+    
+  utils:
+    build:
+      context: ../..
+      dockerfile: infrastructure/docker/Dockerfile.utils
+    container_name: utils
+    networks: [fraud_net]
+    environment:
+      - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+      - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+      - AWS_DEFAULT_REGION=us-east-1
+    volumes:
+      - ../../:/app
+    command: tail -f /dev/null

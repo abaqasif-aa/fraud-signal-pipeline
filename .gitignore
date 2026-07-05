@@ -1,0 +1,28 @@
+# credentials - never commit these
+*.csv
+.env
+.aws/
+
+# python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+
+# spark
+derby.log
+metastore_db/
+spark-warehouse/
+
+# jupyter
+.ipynb_checkpoints/
+
+# ide
+.vscode/
+.idea/
+
+# zip files
+*.zip
+.env
