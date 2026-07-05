@@ -42,12 +42,13 @@ SILVER_PATH = f"s3a://{S3_BUCKET}/silver/transactions"
 RESULTS_KEY = "quality/results"
 AWS_REGION  = "us-east-1"
 
+import os
 DB_CONN = {
-    "host":     "postgres",
-    "port":     5432,
-    "dbname":   "fraud_db",
-    "user":     "fraud_user",
-    "password": "fraud_pass",
+    "host":     os.getenv("POSTGRES_HOST",     "postgres"),
+    "port":     int(os.getenv("POSTGRES_PORT", "5432")),
+    "dbname":   os.getenv("POSTGRES_DB",       "fraud_db"),
+    "user":     os.getenv("POSTGRES_USER",     "fraud_user"),
+    "password": os.getenv("POSTGRES_PASSWORD", "fraud_pass"),
 }
 
 MIN_PASS_RATE = 0.95
