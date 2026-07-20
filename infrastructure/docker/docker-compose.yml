@@ -1,8 +1,5 @@
 version: "3.9"
 
-env_file:
-  - ../../.env
-
 networks:
   fraud_net:
     driver: bridge
