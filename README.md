@@ -7,6 +7,7 @@
 [![Delta Lake](https://img.shields.io/badge/Delta%20Lake-3.1-blue)](https://delta.io)
 [![AWS](https://img.shields.io/badge/AWS-11%20Services-orange)](https://aws.amazon.com)
 [![Great Expectations](https://img.shields.io/badge/Great%20Expectations-0.18-green)](https://greatexpectations.io)
+[![Terraform](https://img.shields.io/badge/Terraform-1.x-purple)](https://terraform.io)
 
 ---
 
@@ -92,6 +93,7 @@ This pipeline addresses all four requirements.
 | Orchestration | Apache Airflow + AWS Step Functions | Airflow for local compute jobs; Step Functions for AWS-native service coordination |
 | Governance | AWS Lake Formation | Column-level security — analysts query fraud scores without seeing raw PII |
 | Serving | AWS Athena + Streamlit | Serverless SQL for analytics; real-time dashboard for fraud analysts |
+| Infrastructure as Code | Terraform | Provisions Glue database, crawler, ETL job, and IAM roles — full destroy and recreate in under 30 seconds |
 
 ---
 
@@ -121,7 +123,7 @@ Kafka (local Docker) maps directly to AWS MSK in production and gives full consu
 
 ### Why Delta Lake over Iceberg?
 
-Both solve ACID transactions on object storage. Delta Lake was chosen for its native Spark integration (zero configuration), mature Python ecosystem, and stronger adoption in Spark-heavy environments. Iceberg would be preferred in a Snowflake or AWS Glue-native environment. In a Snowflake or AWS Glue-native environment, Iceberg would be the natural fit.
+Both solve ACID transactions on object storage. Delta Lake was chosen for its native Spark integration (zero configuration), mature Python ecosystem, and stronger adoption in Spark-heavy environments. In a Snowflake or AWS Glue-native environment, Iceberg would be the natural fit.
 
 ### Why Isolation Forest over supervised models?
 
@@ -130,6 +132,10 @@ Fraud patterns drift. A supervised classifier trained on labeled historical frau
 ### Why two-tier data quality?
 
 Level 1 (inline foreachBatch) catches critical failures within 30 seconds — null spikes, schema drift, amount violations. Acts as a smoke detector. Level 2 (scheduled GE suite) validates full distributions hourly — fraud rate drift, category distribution, mean amount anomalies. Acts as a thorough inspection. A single approach would either be too slow to catch critical failures or too expensive to run continuously at scale.
+
+### Why Terraform for infrastructure?
+
+All Glue infrastructure — IAM roles, Data Catalog database, crawler, and ETL job — is declared in Terraform rather than maintained manually in the AWS console. The full environment can be destroyed and recreated with two commands. Scripts live in Git and are uploaded to S3 by Terraform on deploy, making the infrastructure reproducible across environments without manual steps. In a production team this Terraform code would run through a CI/CD pipeline on every merge to main.
 
 ### Why Great Expectations over Deequ?
 
@@ -220,6 +226,39 @@ This project is under active development. The table below reflects what is built
 
 ---
 
+## Current State
+
+This project is under active development. The table below reflects what is built, tested, and running versus what is planned.
+
+| Component | Status | Notes |
+|---|---|---|
+| Synthetic event generator | ✅ Complete | 100 eps, 2% fraud rate, burst simulation |
+| Kafka producer (Docker) | ✅ Complete | Snappy compression, 3 partitions |
+| Spark Structured Streaming | ✅ Complete | Bronze + silver Delta Lake on S3 verified |
+| Per-batch inline DQ validation | ✅ Complete | foreachBatch — null rate, amount bounds, category enum |
+| Great Expectations suite | ✅ Complete | 15 expectations, SparkDFDataset, 257K records validated |
+| DQ results → S3 + PostgreSQL | ✅ Complete | JSON audit trail in S3, dq_run_log table populated |
+| Schema violation quarantine | ✅ Complete | S3 quarantine path with raw JSON + Kafka offset preserved |
+| Schema evolution (mergeSchema) | ✅ Complete | Pipeline handles new columns without downtime |
+| S3 bucket setup script | ✅ Complete | Idempotent — safe to run multiple times |
+| Docker Compose stack | ✅ Complete | Kafka, Zookeeper, Spark, PostgreSQL, MLflow, utils |
+| Data contract YAML | ✅ Complete | transaction_events_v1.yml |
+| Glue Data Catalog — manual | ✅ Complete | Database, table, crawler, ETL job via console |
+| Glue Data Catalog — Terraform | ✅ Complete | IAM role, database, crawler, ETL job as code |
+| Athena analytics queries | ✅ Complete | 5 queries — fraud rate, category, hour, CNP split, DQ trend |
+| Glue ETL job (Silver → Gold) | ✅ Complete | Visual ETL + PySpark script in Git |
+| Quarantine replay script | 🔄 Planned | replay.py — read quarantine → re-produce to Kafka |
+| ML training pipeline | 🔄 Planned | Isolation Forest + SHAP + MLflow |
+| Real-time inference → gold layer | 🔄 Planned | score_stream.py |
+| Kinesis Firehose path | 🔄 Planned | producer.py scaffolded |
+| Lambda functions | 🔄 Planned | 3 functions scaffolded |
+| Step Functions state machine | 🔄 Planned | deploy.py scaffolded |
+| Airflow retraining DAG | 🔄 Planned | fraud_retraining_dag.py scaffolded |
+| Streamlit dashboard | 🔄 Planned | app.py in progress |
+| Lake Formation security | 🔄 Planned | setup.py scaffolded |
+
+---
+
 ## Quick Start
 
 ### Prerequisites
@@ -237,7 +276,17 @@ cp .env.template .env
 # Edit .env — add your AWS credentials and region
 ```
 
-### 2. Create S3 infrastructure
+### 2. Provision Glue infrastructure
+
+```bash
+cd infrastructure/terraform
+terraform init
+terraform apply
+```
+
+This creates the IAM role, Glue database, crawler, and ETL job in AWS. Safe to run multiple times.
+
+### 3. Create S3 infrastructure
 
 ```bash
 cd infrastructure/docker
@@ -245,7 +294,7 @@ docker compose up -d utils
 docker exec utils python3 /app/infrastructure/aws/setup_s3.py
 ```
 
-### 3. Start all services
+### 4. Start all services
 
 ```bash
 docker compose up -d
@@ -260,7 +309,7 @@ Services available:
 | Airflow | http://localhost:8081 | Pipeline orchestration (admin/admin) |
 | PostgreSQL | localhost:5433 | Fraud signals and DQ run log |
 
-### 4. Verify data is flowing
+### 5. Verify data is flowing
 
 ```bash
 # Watch Kafka UI at http://localhost:8080 → topics → transactions.raw → messages
@@ -269,7 +318,7 @@ Services available:
 aws s3 ls s3://$S3_BUCKET/silver/transactions/ --recursive | head -20
 ```
 
-### 5. Run data quality validation
+### 6. Run data quality validation
 
 ```bash
 docker exec spark spark-submit \
@@ -279,7 +328,7 @@ docker exec spark spark-submit \
   /app/validate_silver.py
 ```
 
-### 6. Train the fraud detection model
+### 7. Train the fraud detection model
 
 ```bash
 docker exec spark spark-submit \
@@ -331,6 +380,13 @@ fraud-signal-pipeline/
 │   │   ├── lambda/                     # Lambda functions (3 functions)
 │   │   ├── step_functions/             # State machine definition
 │   │   └── eventbridge/               # Scheduled trigger rule
+│   ├── terraform/
+│   │   ├── main.tf                     # IAM role, Glue database, crawler, ETL job
+│   │   ├── provider.tf                 # AWS provider configuration
+│   │   ├── variables.tf                # Project, bucket, region, database variables
+│   │   └── outputs.tf                  # Role ARN, crawler name, job name
+│   ├── aws/glue/jobs/
+│   │   └── fraud_silver_to_gold_summary.py  # PySpark ETL script
 │   └── docker/
 │       ├── docker-compose.yml          # Full local stack (7 services)
 │       ├── Dockerfile.utils            # Utility container for AWS scripts
@@ -379,6 +435,10 @@ Spark Structured Streaming with Delta Lake ACID guarantees on S3, per-partition 
 ### AWS cloud architecture
 
 Eleven AWS services integrated into a coherent lakehouse architecture — S3 as the storage foundation, Glue for metadata management, Athena for serverless analytics, Lambda for event-driven triggers, and Lake Formation for fine-grained access control. Total cost: ~$0.66/month, demonstrating cost-aware cloud design.
+
+### Infrastructure as code
+
+All Glue infrastructure is declared in Terraform — IAM roles, Data Catalog database, crawler with Delta Lake-specific exclusion patterns, and ETL job pointing to a versioned PySpark script in S3. The full environment can be destroyed and recreated with `terraform destroy` and `terraform apply` in under 30 seconds. This eliminates manual console steps from the reproducibility path and maps directly to how production infrastructure is managed at scale.
 
 ### ML explainability
 
