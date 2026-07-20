@@ -1,0 +1,11 @@
+# Terraform provider binaries — downloaded by terraform init
+.terraform/
+
+# State files — contain sensitive resource details
+# In production these live in S3 with DynamoDB locking
+terraform.tfstate
+terraform.tfstate.backup
+
+# Variable files that may contain secrets
+*.tfvars
+*.tfvars.json
