@@ -26,3 +26,5 @@ spark-warehouse/
 # zip files
 *.zip
 .env
+infrastructure/docker/.env
+.claude/

@@ -7,7 +7,9 @@ RUN pip install --no-cache-dir \
     boto3==1.34.0 \
     psycopg2-binary==2.9.9 \
     pandas==2.1.4 \
-    great-expectations==0.18.19
+    great-expectations==0.18.19 \
+    fastavro==1.9.0 \
+    requests==2.31.0
 
 WORKDIR /app
 
