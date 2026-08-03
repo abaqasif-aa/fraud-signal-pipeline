@@ -76,6 +76,23 @@ services:
       --default-artifact-root /mlflow/artifacts
 
 
+
+  schema-registry:
+    image: confluentinc/cp-schema-registry:7.5.0
+    container_name: schema-registry
+    networks: [fraud_net]
+    depends_on: [kafka]
+    ports:
+      - "8081:8081"
+    environment:
+      SCHEMA_REGISTRY_HOST_NAME: schema-registry
+      SCHEMA_REGISTRY_KAFKASTORE_BOOTSTRAP_SERVERS: kafka:29092
+      SCHEMA_REGISTRY_LISTENERS: http://0.0.0.0:8081
+      SCHEMA_REGISTRY_KAFKASTORE_TOPIC: _schemas
+      SCHEMA_REGISTRY_KAFKASTORE_TOPIC_REPLICATION_FACTOR: 1
+    restart: on-failure
+
+    
   generator:
     build:
       context: ../../ingestion/generator
@@ -92,7 +109,7 @@ services:
       dockerfile: Dockerfile
     container_name: spark
     networks: [fraud_net]
-    depends_on: [kafka]
+    depends_on: [kafka]        
     environment:
       - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
       - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
