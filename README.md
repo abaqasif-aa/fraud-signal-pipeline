@@ -28,11 +28,14 @@ This pipeline addresses all four requirements.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
-│  INGESTION                                                              │
+│  INGESTION + CDC                                                        │
 │                                                                         │
-│  [Synthetic Generator] ──► [Kafka: transactions.raw (3 partitions)]     │
-│   100 events/sec              Local Docker — maps to AWS MSK            │
-│   2% fraud rate               Snappy compression · Burst simulation     │
+│  [Synthetic Generator] ──► [Schema Registry] ──► [Kafka: transactions.raw]
+│   100 events/sec · Avro   FULL compatibility      3 partitions · MSK   │
+│   2% fraud rate           schema ID embedded      Snappy compression   │
+│                                                                         │
+│  [PostgreSQL OLTP] ──► [Debezium CDC] ──► [Kafka: fraud_db.public.*]   │
+│   WAL logical repl.    before/after/op/lsn    MSK Connect in prod      │
 │                                                                         │
 │                    └──► [Kinesis Firehose] ──► [S3 raw NDJSON]          │
 │                           Serverless AWS path    $0.029/GB              │
@@ -42,7 +45,7 @@ This pipeline addresses all four requirements.
 │  PROCESSING                                                             │
 │                                                                         │
 │  [Spark Structured Streaming 3.5]                                       │
-│   30s micro-batches · Schema enforcement · foreachBatch validation      │
+│   30s micro-batches · Avro deserialization · foreachBatch DQ           │
 │                                                                         │
 │   Bronze (S3/Delta) ──────► Silver (S3/Delta, partitioned by date)      │
 │   Raw · Immutable           DQ flags · Derived columns · Risk signals   │
@@ -94,6 +97,8 @@ This pipeline addresses all four requirements.
 | Governance | AWS Lake Formation | Column-level security — analysts query fraud scores without seeing raw PII |
 | Serving | AWS Athena + Streamlit | Serverless SQL for analytics; real-time dashboard for fraud analysts |
 | Infrastructure as Code | Terraform | Provisions Glue database, crawler, ETL job, and IAM roles — full destroy and recreate in under 30 seconds |
+| Schema Registry | Confluent Schema Registry (local) + AWS Glue Schema Registry | Avro schema versioning, FULL compatibility enforcement, schema ID embedded in every Kafka message |
+| CDC | Debezium + Kafka Connect | Captures PostgreSQL WAL changes as Kafka events — before/after/op/lsn — maps to MSK Connect + Aurora in production |
 
 ---
 
@@ -201,53 +206,28 @@ This project is under active development. The table below reflects what is built
 | Component | Status | Notes |
 |---|---|---|
 | Synthetic event generator | ✅ Complete | 100 eps, 2% fraud rate, burst simulation |
-| Kafka producer (Docker) | ✅ Complete | Snappy compression, 3 partitions |
-| Spark Structured Streaming | ✅ Complete | Bronze + silver Delta Lake on S3 verified |
+| Kafka producer — Avro | ✅ Complete | fastavro · Confluent wire format · schema ID embedded |
+| Confluent Schema Registry | ✅ Complete | Docker · FULL compatibility · schema cached per executor |
+| AWS Glue Schema Registry | ✅ Complete | Console learning · versioning · compatibility modes explored |
+| Spark Structured Streaming | ✅ Complete | Avro deserialization · Bronze + Silver Delta Lake on S3 |
 | Per-batch inline DQ validation | ✅ Complete | foreachBatch — null rate, amount bounds, category enum |
 | Great Expectations suite | ✅ Complete | 15 expectations, SparkDFDataset, 257K records validated |
 | DQ results → S3 + PostgreSQL | ✅ Complete | JSON audit trail in S3, dq_run_log table populated |
-| Schema violation quarantine | ✅ Complete | S3 quarantine path with raw JSON + Kafka offset preserved |
+| Schema violation quarantine | ✅ Complete | S3 dlq/ · raw JSON + Kafka offset preserved · replay-ready |
 | Schema evolution (mergeSchema) | ✅ Complete | Pipeline handles new columns without downtime |
 | S3 bucket setup script | ✅ Complete | Idempotent — safe to run multiple times |
-| Docker Compose stack | ✅ Complete | Kafka, Zookeeper, Spark, PostgreSQL, MLflow, utils |
-| Data contract YAML | ✅ Complete | transaction_events_v1.yml |
-| Architecture diagram | ✅ Complete | docs/architecture/fraud_event_generation_flow.png |
-| Quarantine replay script | 🔄 Planned | replay.py — read quarantine → re-produce to Kafka |
-| ML training pipeline | 🔄 Planned | Isolation Forest + SHAP + MLflow |
-| Real-time inference → gold layer | 🔄 Planned | score_stream.py |
-| Glue Data Catalog registration | 🔄 Planned | glue_catalog.py scaffolded |
-| Athena analytics queries | 🔄 Planned | athena_queries.py scaffolded |
-| Kinesis Firehose path | 🔄 Planned | producer.py scaffolded |
-| Lambda functions | 🔄 Planned | 3 functions scaffolded |
-| Step Functions state machine | 🔄 Planned | deploy.py scaffolded |
-| Airflow retraining DAG | 🔄 Planned | fraud_retraining_dag.py scaffolded |
-| Streamlit dashboard | 🔄 Planned | app.py in progress |
-| Lake Formation security | 🔄 Planned | setup.py scaffolded |
-
----
-
-## Current State
-
-This project is under active development. The table below reflects what is built, tested, and running versus what is planned.
-
-| Component | Status | Notes |
-|---|---|---|
-| Synthetic event generator | ✅ Complete | 100 eps, 2% fraud rate, burst simulation |
-| Kafka producer (Docker) | ✅ Complete | Snappy compression, 3 partitions |
-| Spark Structured Streaming | ✅ Complete | Bronze + silver Delta Lake on S3 verified |
-| Per-batch inline DQ validation | ✅ Complete | foreachBatch — null rate, amount bounds, category enum |
-| Great Expectations suite | ✅ Complete | 15 expectations, SparkDFDataset, 257K records validated |
-| DQ results → S3 + PostgreSQL | ✅ Complete | JSON audit trail in S3, dq_run_log table populated |
-| Schema violation quarantine | ✅ Complete | S3 quarantine path with raw JSON + Kafka offset preserved |
-| Schema evolution (mergeSchema) | ✅ Complete | Pipeline handles new columns without downtime |
-| S3 bucket setup script | ✅ Complete | Idempotent — safe to run multiple times |
-| Docker Compose stack | ✅ Complete | Kafka, Zookeeper, Spark, PostgreSQL, MLflow, utils |
+| Docker Compose stack | ✅ Complete | Kafka, Zookeeper, Spark, Schema Registry, Debezium, PostgreSQL, MLflow |
 | Data contract YAML | ✅ Complete | transaction_events_v1.yml |
 | Glue Data Catalog — manual | ✅ Complete | Database, table, crawler, ETL job via console |
 | Glue Data Catalog — Terraform | ✅ Complete | IAM role, database, crawler, ETL job as code |
 | Athena analytics queries | ✅ Complete | 5 queries — fraud rate, category, hour, CNP split, DQ trend |
 | Glue ETL job (Silver → Gold) | ✅ Complete | Visual ETL + PySpark script in Git |
 | Quarantine replay script | 🔄 Planned | replay.py — read quarantine → re-produce to Kafka |
+| CDC (Debezium) | ✅ Complete | Debezium 2.5 · PostgreSQL WAL · fraud_signals + dq_run_log topics · auto-registered via debezium-init |
+| Exactly-once semantics | 🔄 Planned | MERGE pattern + checkpoint order fix |
+| Stateful streaming | 🔄 Planned | Velocity detection · mapGroupsWithState |
+| Column lineage (OpenLineage) | 🔄 Planned | Marquez in Docker |
+| BCBS239 documentation | 🔄 Planned | Compliance mapping to pipeline components |
 | ML training pipeline | 🔄 Planned | Isolation Forest + SHAP + MLflow |
 | Real-time inference → gold layer | 🔄 Planned | score_stream.py |
 | Kinesis Firehose path | 🔄 Planned | producer.py scaffolded |
@@ -256,6 +236,7 @@ This project is under active development. The table below reflects what is built
 | Airflow retraining DAG | 🔄 Planned | fraud_retraining_dag.py scaffolded |
 | Streamlit dashboard | 🔄 Planned | app.py in progress |
 | Lake Formation security | 🔄 Planned | setup.py scaffolded |
+| Redshift Spectrum | 📄 Documented | Architecture + interview talking points only |
 
 ---
 
@@ -274,6 +255,9 @@ git clone https://github.com/abaqasif-aa/fraud-signal-pipeline.git
 cd fraud-signal-pipeline
 cp .env.template .env
 # Edit .env — add your AWS credentials and region
+
+# Required — Docker Compose reads .env from the docker directory
+ln -s ../../.env infrastructure/docker/.env
 ```
 
 ### 2. Provision Glue infrastructure
@@ -305,11 +289,27 @@ Services available:
 | Service | URL | Purpose |
 |---|---|---|
 | Kafka UI | http://localhost:8080 | Browse topics and live messages |
+| Schema Registry | http://localhost:8081 | Avro schema versions and compatibility |
 | MLflow | http://localhost:5000 | Experiment tracking and model registry |
-| Airflow | http://localhost:8081 | Pipeline orchestration (admin/admin) |
 | PostgreSQL | localhost:5433 | Fraud signals and DQ run log |
 
-### 5. Verify data is flowing
+### 5. Verify CDC is running
+
+```bash
+# Check Debezium connector status
+curl http://localhost:8083/connectors/fraud-postgres-connector/status
+
+# Verify CDC topics exist
+docker exec kafka kafka-topics --bootstrap-server kafka:29092 --list | grep fraud_db
+
+# Consume a CDC event
+docker exec kafka kafka-console-consumer \
+  --bootstrap-server kafka:29092 \
+  --topic fraud_db.public.fraud_signals \
+  --from-beginning --max-messages 1
+```
+
+### 6. Verify data is flowing
 
 ```bash
 # Watch Kafka UI at http://localhost:8080 → topics → transactions.raw → messages
@@ -318,7 +318,7 @@ Services available:
 aws s3 ls s3://$S3_BUCKET/silver/transactions/ --recursive | head -20
 ```
 
-### 6. Run data quality validation
+### 7. Run data quality validation
 
 ```bash
 docker exec spark spark-submit \
@@ -328,7 +328,7 @@ docker exec spark spark-submit \
   /app/validate_silver.py
 ```
 
-### 7. Train the fraud detection model
+### 8. Train the fraud detection model
 
 ```bash
 docker exec spark spark-submit \
@@ -388,7 +388,8 @@ fraud-signal-pipeline/
 │   ├── aws/glue/jobs/
 │   │   └── fraud_silver_to_gold_summary.py  # PySpark ETL script
 │   └── docker/
-│       ├── docker-compose.yml          # Full local stack (7 services)
+│       ├── docker-compose.yml          # Full local stack (9 services)
+│       ├── cdc_setup.sh               # Debezium connector registration (auto-called by debezium-init)
 │       ├── Dockerfile.utils            # Utility container for AWS scripts
 │       └── init.sql                    # PostgreSQL schema + views
 ├── monitoring/
@@ -416,8 +417,8 @@ Total records:       257,733
 Per-batch inline validation runs every 30 seconds:
 
 ```
-Batch 45 | records=4,790 | pass_rate=100.0% | fraud_rate=2.5% | null_rate=0.000%
-Batch 46 | records=3,012 | pass_rate=100.0% | fraud_rate=1.9% | null_rate=0.000%
+Batch 198 | records=77,960 | pass_rate=100.0% | fraud_rate=2.0% | null_rate=0.000%
+Batch 199 | records=2,081  | pass_rate=100.0% | fraud_rate=2.1% | null_rate=0.000%
 ```
 
 ---
@@ -439,6 +440,10 @@ Eleven AWS services integrated into a coherent lakehouse architecture — S3 as 
 ### Infrastructure as code
 
 All Glue infrastructure is declared in Terraform — IAM roles, Data Catalog database, crawler with Delta Lake-specific exclusion patterns, and ETL job pointing to a versioned PySpark script in S3. The full environment can be destroyed and recreated with `terraform destroy` and `terraform apply` in under 30 seconds. This eliminates manual console steps from the reproducibility path and maps directly to how production infrastructure is managed at scale.
+
+### Schema enforcement and CDC
+
+Avro serialization with Confluent Schema Registry enforces the data contract at the wire level — every message produced to Kafka carries a schema ID in its header. The consumer fetches the schema once per version and caches it, adding zero per-message latency. FULL compatibility mode ensures breaking changes are rejected at registration time rather than discovered at runtime when consumers crash. Debezium CDC captures every INSERT, UPDATE, and DELETE from PostgreSQL as a structured event with before/after images and the WAL LSN — enabling exact replay from any point in the transaction log. In production this maps directly to MSK Connect + Aurora PostgreSQL with the same connector configuration.
 
 ### ML explainability
 
