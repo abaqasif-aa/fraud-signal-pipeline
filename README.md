@@ -201,53 +201,28 @@ This project is under active development. The table below reflects what is built
 | Component | Status | Notes |
 |---|---|---|
 | Synthetic event generator | ✅ Complete | 100 eps, 2% fraud rate, burst simulation |
-| Kafka producer (Docker) | ✅ Complete | Snappy compression, 3 partitions |
-| Spark Structured Streaming | ✅ Complete | Bronze + silver Delta Lake on S3 verified |
+| Kafka producer — Avro | ✅ Complete | fastavro · Confluent wire format · schema ID embedded |
+| Confluent Schema Registry | ✅ Complete | Docker · FULL compatibility · schema cached per executor |
+| AWS Glue Schema Registry | ✅ Complete | Console learning · versioning · compatibility modes explored |
+| Spark Structured Streaming | ✅ Complete | Avro deserialization · Bronze + Silver Delta Lake on S3 |
 | Per-batch inline DQ validation | ✅ Complete | foreachBatch — null rate, amount bounds, category enum |
 | Great Expectations suite | ✅ Complete | 15 expectations, SparkDFDataset, 257K records validated |
 | DQ results → S3 + PostgreSQL | ✅ Complete | JSON audit trail in S3, dq_run_log table populated |
-| Schema violation quarantine | ✅ Complete | S3 quarantine path with raw JSON + Kafka offset preserved |
+| Schema violation quarantine | ✅ Complete | S3 dlq/ · raw JSON + Kafka offset preserved · replay-ready |
 | Schema evolution (mergeSchema) | ✅ Complete | Pipeline handles new columns without downtime |
 | S3 bucket setup script | ✅ Complete | Idempotent — safe to run multiple times |
-| Docker Compose stack | ✅ Complete | Kafka, Zookeeper, Spark, PostgreSQL, MLflow, utils |
-| Data contract YAML | ✅ Complete | transaction_events_v1.yml |
-| Architecture diagram | ✅ Complete | docs/architecture/fraud_event_generation_flow.png |
-| Quarantine replay script | 🔄 Planned | replay.py — read quarantine → re-produce to Kafka |
-| ML training pipeline | 🔄 Planned | Isolation Forest + SHAP + MLflow |
-| Real-time inference → gold layer | 🔄 Planned | score_stream.py |
-| Glue Data Catalog registration | 🔄 Planned | glue_catalog.py scaffolded |
-| Athena analytics queries | 🔄 Planned | athena_queries.py scaffolded |
-| Kinesis Firehose path | 🔄 Planned | producer.py scaffolded |
-| Lambda functions | 🔄 Planned | 3 functions scaffolded |
-| Step Functions state machine | 🔄 Planned | deploy.py scaffolded |
-| Airflow retraining DAG | 🔄 Planned | fraud_retraining_dag.py scaffolded |
-| Streamlit dashboard | 🔄 Planned | app.py in progress |
-| Lake Formation security | 🔄 Planned | setup.py scaffolded |
-
----
-
-## Current State
-
-This project is under active development. The table below reflects what is built, tested, and running versus what is planned.
-
-| Component | Status | Notes |
-|---|---|---|
-| Synthetic event generator | ✅ Complete | 100 eps, 2% fraud rate, burst simulation |
-| Kafka producer (Docker) | ✅ Complete | Snappy compression, 3 partitions |
-| Spark Structured Streaming | ✅ Complete | Bronze + silver Delta Lake on S3 verified |
-| Per-batch inline DQ validation | ✅ Complete | foreachBatch — null rate, amount bounds, category enum |
-| Great Expectations suite | ✅ Complete | 15 expectations, SparkDFDataset, 257K records validated |
-| DQ results → S3 + PostgreSQL | ✅ Complete | JSON audit trail in S3, dq_run_log table populated |
-| Schema violation quarantine | ✅ Complete | S3 quarantine path with raw JSON + Kafka offset preserved |
-| Schema evolution (mergeSchema) | ✅ Complete | Pipeline handles new columns without downtime |
-| S3 bucket setup script | ✅ Complete | Idempotent — safe to run multiple times |
-| Docker Compose stack | ✅ Complete | Kafka, Zookeeper, Spark, PostgreSQL, MLflow, utils |
+| Docker Compose stack | ✅ Complete | Kafka, Zookeeper, Spark, Schema Registry, PostgreSQL, MLflow |
 | Data contract YAML | ✅ Complete | transaction_events_v1.yml |
 | Glue Data Catalog — manual | ✅ Complete | Database, table, crawler, ETL job via console |
 | Glue Data Catalog — Terraform | ✅ Complete | IAM role, database, crawler, ETL job as code |
 | Athena analytics queries | ✅ Complete | 5 queries — fraud rate, category, hour, CNP split, DQ trend |
 | Glue ETL job (Silver → Gold) | ✅ Complete | Visual ETL + PySpark script in Git |
 | Quarantine replay script | 🔄 Planned | replay.py — read quarantine → re-produce to Kafka |
+| CDC (Debezium) | 🔄 Planned | Docker · maps to MSK Connect + Aurora in production |
+| Exactly-once semantics | 🔄 Planned | MERGE pattern + checkpoint order fix |
+| Stateful streaming | 🔄 Planned | Velocity detection · mapGroupsWithState |
+| Column lineage (OpenLineage) | 🔄 Planned | Marquez in Docker |
+| BCBS239 documentation | 🔄 Planned | Compliance mapping to pipeline components |
 | ML training pipeline | 🔄 Planned | Isolation Forest + SHAP + MLflow |
 | Real-time inference → gold layer | 🔄 Planned | score_stream.py |
 | Kinesis Firehose path | 🔄 Planned | producer.py scaffolded |
@@ -256,6 +231,7 @@ This project is under active development. The table below reflects what is built
 | Airflow retraining DAG | 🔄 Planned | fraud_retraining_dag.py scaffolded |
 | Streamlit dashboard | 🔄 Planned | app.py in progress |
 | Lake Formation security | 🔄 Planned | setup.py scaffolded |
+| Redshift Spectrum | 📄 Documented | Architecture + interview talking points only |
 
 ---
 
@@ -274,6 +250,9 @@ git clone https://github.com/abaqasif-aa/fraud-signal-pipeline.git
 cd fraud-signal-pipeline
 cp .env.template .env
 # Edit .env — add your AWS credentials and region
+
+# Required — Docker Compose reads .env from the docker directory
+ln -s ../../.env infrastructure/docker/.env
 ```
 
 ### 2. Provision Glue infrastructure
@@ -305,8 +284,8 @@ Services available:
 | Service | URL | Purpose |
 |---|---|---|
 | Kafka UI | http://localhost:8080 | Browse topics and live messages |
+| Schema Registry | http://localhost:8081 | Avro schema versions and compatibility |
 | MLflow | http://localhost:5000 | Experiment tracking and model registry |
-| Airflow | http://localhost:8081 | Pipeline orchestration (admin/admin) |
 | PostgreSQL | localhost:5433 | Fraud signals and DQ run log |
 
 ### 5. Verify data is flowing
